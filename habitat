@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+SLOTS_DIR="$SCRIPT_DIR/slots"
+
+# Allowlist — only these are ever read or written
+PORTABLE_MD_DIRS=("commands" "agents" "skills")
+PORTABLE_FILES=("settings.json" "CLAUDE.md")
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+validate_slot_name() {
+    local name="$1"
+    [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || die "Invalid slot name '$name'. Use [a-zA-Z0-9_-] only."
+}
+
+reject_symlinks() {
+    local dir="$1"
+    local label="$2"
+    local links
+    links=$(find "$dir" -type l 2>/dev/null) || true
+    if [ -n "$links" ]; then
+        printf "Error: Symlinks found in %s — refusing to proceed:\n%s\n" "$label" "$links" >&2
+        exit 1
+    fi
+}
+
+# Copy *.md files recursively from $src to $dst, preserving subdirectory structure.
+# Prints the count of files copied. Dies on symlinks.
+copy_md_tree() {
+    local src="$1" dst="$2"
+    local count=0
+    while IFS= read -r -d '' f; do
+        [ -L "$f" ] && die "Symlink found: $f"
+        local rel="${f#"$src"/}"
+        mkdir -p "$dst/$(dirname "$rel")"
+        cp "$f" "$dst/$rel"
+        count=$((count + 1))
+    done < <(find "$src" -type f -name '*.md' -print0 2>/dev/null)
+    echo "$count"
+}
+
+# Write META file with sha256 manifest
+write_meta() {
+    local target="$1"
+    local manifest
+    manifest=$(find "$target" -type f ! -name META -print0 2>/dev/null \
+        | sort -z \
+        | xargs -0 shasum -a 256 2>/dev/null \
+        | sed "s|$target/||" || true)
+
+    cat > "$target/META" <<EOF
+version: 2
+timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+hostname: $(hostname)
+os: $(uname -s)-$(uname -m)
+---
+$manifest
+EOF
+}
+
+# Save all portable artifacts from $CLAUDE_HOME into $target directory.
+# Returns 1 if nothing was captured.
+save_portable_to_dir() {
+    local target="$1"
+    local total=0
+
+    # MD directory artifacts
+    for dname in "${PORTABLE_MD_DIRS[@]}"; do
+        local src="$CLAUDE_HOME/$dname"
+        if [ -d "$src" ]; then
+            reject_symlinks "$src" "$src"
+            mkdir -p "$target/$dname"
+            local n
+            n=$(copy_md_tree "$src" "$target/$dname")
+            total=$((total + n))
+        fi
+    done
+
+    # Single-file artifacts
+    for fname in "${PORTABLE_FILES[@]}"; do
+        local src="$CLAUDE_HOME/$fname"
+        if [ -f "$src" ]; then
+            [ -L "$src" ] && die "Symlink found: $src"
+            cp "$src" "$target/$fname"
+            total=$((total + 1))
+        fi
+    done
+
+    write_meta "$target"
+
+    [ "$total" -gt 0 ] && return 0 || return 1
+}
+
+# ── Commands ─────────────────────────────────────────────────────────────
+
+cmd_save() {
+    local name="$1"
+    validate_slot_name "$name"
+    [[ "$name" == _backup_* ]] && die "Slot names starting with '_backup_' are reserved."
+
+    # Atomic write: temp dir → rename
+    local tmpdir
+    tmpdir=$(mktemp -d "$SLOTS_DIR/.tmp.XXXX")
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    if ! save_portable_to_dir "$tmpdir"; then
+        die "Nothing portable found in $CLAUDE_HOME. Nothing to save."
+    fi
+
+    rm -rf "${SLOTS_DIR:?}/$name"
+    mv "$tmpdir" "$SLOTS_DIR/$name"
+    trap - EXIT  # disarm
+
+    # Summary
+    echo "Saved to slot '$name':"
+    for dname in "${PORTABLE_MD_DIRS[@]}"; do
+        if [ -d "$SLOTS_DIR/$name/$dname" ]; then
+            echo "  $dname/  $(find "$SLOTS_DIR/$name/$dname" -type f -name '*.md' | wc -l | tr -d ' ') file(s)"
+        fi
+    done
+    for fname in "${PORTABLE_FILES[@]}"; do
+        if [ -f "$SLOTS_DIR/$name/$fname" ]; then
+            echo "  $fname"
+        fi
+    done
+}
+
+cmd_load() {
+    local name="$1"
+    validate_slot_name "$name"
+
+    local slot="$SLOTS_DIR/$name"
+    [ -d "$slot" ] || die "Slot '$name' not found."
+    [ -f "$slot/META" ] || die "Slot '$name' is missing META — corrupted?"
+    reject_symlinks "$slot" "slot '$name'"
+
+    # Auto-backup current state before overwriting
+    local backup_name="_backup_$(date -u +%Y%m%dT%H%M%SZ)"
+    local backup_dir="$SLOTS_DIR/$backup_name"
+    mkdir -p "$backup_dir"
+    if save_portable_to_dir "$backup_dir"; then
+        echo "Auto-backup saved to '$backup_name'."
+    else
+        rm -rf "$backup_dir"
+        echo "(No existing portable config to back up.)"
+    fi
+
+    # Load directory artifacts
+    for dname in "${PORTABLE_MD_DIRS[@]}"; do
+        if [ -d "$slot/$dname" ]; then
+            local dst="$CLAUDE_HOME/$dname"
+            mkdir -p "$dst"
+            # Remove existing *.md recursively, then copy from slot
+            find "$dst" -type f -name '*.md' -delete 2>/dev/null || true
+            copy_md_tree "$slot/$dname" "$dst" > /dev/null
+        fi
+    done
+
+    # Load single-file artifacts
+    for fname in "${PORTABLE_FILES[@]}"; do
+        if [ -f "$slot/$fname" ]; then
+            cp "$slot/$fname" "$CLAUDE_HOME/$fname"
+        fi
+    done
+
+    # Summary
+    echo "Loaded from slot '$name':"
+    for dname in "${PORTABLE_MD_DIRS[@]}"; do
+        if [ -d "$slot/$dname" ]; then
+            echo "  $dname/  $(find "$slot/$dname" -type f -name '*.md' | wc -l | tr -d ' ') file(s)"
+        fi
+    done
+    for fname in "${PORTABLE_FILES[@]}"; do
+        if [ -f "$slot/$fname" ]; then
+            echo "  $fname"
+        fi
+    done
+}
+
+cmd_list() {
+    local found=0
+    for dir in "$SLOTS_DIR"/*/; do
+        [ -d "$dir" ] || continue
+        local meta="$dir/META"
+        [ -f "$meta" ] || continue
+        found=1
+        local name
+        name=$(basename "$dir")
+
+        local ts host os
+        ts=$(grep '^timestamp:' "$meta" | cut -d' ' -f2-)
+        host=$(grep '^hostname:' "$meta" | cut -d' ' -f2-)
+        os=$(grep '^os:' "$meta" | cut -d' ' -f2-)
+
+        echo "$name"
+        echo "  saved: $ts  host: $host  os: $os"
+
+        for dname in "${PORTABLE_MD_DIRS[@]}"; do
+            if [ -d "$dir/$dname" ]; then
+                echo "  $dname/  $(find "$dir/$dname" -type f -name '*.md' | wc -l | tr -d ' ') file(s)"
+            fi
+        done
+        for fname in "${PORTABLE_FILES[@]}"; do
+            if [ -f "$dir/$fname" ]; then
+                echo "  $fname"
+            fi
+        done
+        echo ""
+    done
+
+    if [ "$found" -eq 0 ]; then
+        echo "No slots found."
+    fi
+}
+
+usage() {
+    echo "Usage: habitat <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  save <name>   Save portable ~/.claude/ config to a slot"
+    echo "  load <name>   Restore a slot into ~/.claude/ (auto-backs up first)"
+    echo "  list          Show available slots"
+    echo ""
+    echo "Portable artifacts: commands/ agents/ skills/ settings.json CLAUDE.md"
+    echo "Set \$CLAUDE_HOME to override ~/.claude path."
+    exit 1
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────
+
+[ $# -lt 1 ] && usage
+
+case "$1" in
+    save)
+        [ $# -lt 2 ] && usage
+        cmd_save "$2"
+        ;;
+    load)
+        [ $# -lt 2 ] && usage
+        cmd_load "$2"
+        ;;
+    list)
+        cmd_list
+        ;;
+    *)
+        usage
+        ;;
+esac
