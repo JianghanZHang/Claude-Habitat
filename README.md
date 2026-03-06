@@ -1,12 +1,25 @@
 # Claude Habitat
 
-The portable habitat for Claude Code — user side.
+An agent transportation protocol for Claude Code.
 
-`~/.claude/` is the live register file. `slots/<name>/` is persistent storage. The `habitat` script is a store/load unit with a hardcoded allowlist: it moves exactly the user-authored, portable subset of Claude's configuration between machines via git, and nothing else. Every transfer is SHA-256 verified end-to-end.
+## What this is
 
-## Model
+The Claude model is infrastructure — identical on every machine. What makes it *your* Claude is the user-authored configuration: commands define what it can do, agents define its roles, skills define its capabilities, CLAUDE.md defines its behavioral instructions, settings.json defines its permission boundaries. These five artifacts are the agent's portable state — the differential that separates one user's Claude from another's.
 
-Claude Code stores user-level configuration in `~/.claude/`. This directory mixes portable, user-authored artifacts (commands, agents, skills, instructions, permissions) with machine-local state (credentials, caches, session history, project bindings). Habitat isolates the portable subset, serialises it into a git-tracked slot with a SHA-256 manifest, and deserialises it on any other machine. The invariant: what you save is exactly what you load, byte-for-byte, verified at every stage.
+Habitat is the protocol that serialises this portable state into a verified, git-tracked slot and deserialises it on any other machine. The invariant: what you save is exactly what you load, byte-for-byte, verified at every stage.
+
+## Protocol
+
+```
+~/.claude/  ──save──▶  slots/<name>/  ──git──▶  [remote]  ──git──▶  slots/<name>/  ──load──▶  ~/.claude/
+  (register)            (serialised)                                  (serialised)              (register)
+```
+
+Three properties make this a protocol, not a script:
+
+1. **Format** — the slot structure (META manifest + allowlisted artifacts) is a defined serialisation format
+2. **Procedure** — save/load/sync are defined state-transfer operations with atomicity guarantees
+3. **Integrity** — SHA-256 verification chain at every stage: save verifies the slot, load verifies the destination round-trip, sync verifies the remote
 
 ## What it syncs
 

@@ -1,8 +1,8 @@
 # Claude-Habitat
 
-The portable habitat for Claude Code — user side.
+An agent transportation protocol for Claude Code.
 
-`~/.claude/` is the live register file (active state). `slots/<name>/` is persistent storage. The `habitat` script is the sole store/load unit: a hardcoded allowlist controls exactly which user-authored, portable artifacts are transferred. Every transfer is SHA-256 verified end-to-end. Nothing outside the allowlist is ever read or written.
+The model is infrastructure. The user config (commands, agents, skills, instructions, permissions) is the portable agent state — the differential. Habitat serialises this differential into a git-tracked slot with a SHA-256 manifest, and deserialises it on any other machine. `~/.claude/` is the register file (active state), `slots/<name>/` is persistent storage, `habitat` is the sole store/load unit. Nothing outside the hardcoded allowlist is ever read or written.
 
 ## Single deliverable
 
