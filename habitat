@@ -5,9 +5,33 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SLOTS_DIR="$SCRIPT_DIR/slots"
 
-# Allowlist — only these are ever read or written
 PORTABLE_MD_DIRS=("commands" "agents" "skills")
 PORTABLE_FILES=("settings.json" "CLAUDE.md")
+
+# ── Output (compiler-style) ─────────────────────────────────────────────
+
+emit() {
+    local phase="$1" msg="$2" result="${3:-}"
+    if [ -n "$result" ]; then
+        printf "  %-8s %-34s %s\n" "$phase" "$msg" "$result"
+    else
+        printf "  %-8s %s\n" "$phase" "$msg"
+    fi
+}
+
+banner() { printf "\nhabitat · %s\n" "$*"; }
+rule()   { printf "  ────────────────────────────────────────────────\n"; }
+
+pass() {
+    rule
+    printf "  \033[32mPASS\033[0m  %s\n\n" "$1"
+}
+
+fail() {
+    rule
+    printf "  \033[31mFAIL\033[0m  %s\n\n" "$1" >&2
+    exit 1
+}
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -19,18 +43,15 @@ validate_slot_name() {
 }
 
 reject_symlinks() {
-    local dir="$1"
-    local label="$2"
+    local dir="$1" label="$2"
     local links
     links=$(find "$dir" -type l 2>/dev/null) || true
     if [ -n "$links" ]; then
-        printf "Error: Symlinks found in %s — refusing to proceed:\n%s\n" "$label" "$links" >&2
+        printf "Error: Symlinks found in %s:\n%s\n" "$label" "$links" >&2
         exit 1
     fi
 }
 
-# Copy *.md files recursively from $src to $dst, preserving subdirectory structure.
-# Prints the count of files copied. Dies on symlinks.
 copy_md_tree() {
     local src="$1" dst="$2"
     local count=0
@@ -44,7 +65,6 @@ copy_md_tree() {
     echo "$count"
 }
 
-# Write META file with sha256 manifest
 write_meta() {
     local target="$1"
     local manifest
@@ -52,7 +72,6 @@ write_meta() {
         | sort -z \
         | xargs -0 shasum -a 256 2>/dev/null \
         | sed "s|$target/||" || true)
-
     cat > "$target/META" <<EOF
 version: 2
 timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -63,13 +82,86 @@ $manifest
 EOF
 }
 
-# Save all portable artifacts from $CLAUDE_HOME into $target directory.
-# Returns 1 if nothing was captured.
+# Verify a slot's files against its META sha256 manifest.
+# $1 = slot dir, $2 = emit phase label
+# Returns 0 if all pass, 1 if any fail.
+verify_slot() {
+    local slot="$1" phase="${2:-check}"
+    [ -f "$slot/META" ] || { emit "$phase" "META" "MISSING"; return 1; }
+
+    local in_manifest=0 checked=0 failed=0
+    while IFS= read -r line; do
+        if [ "$in_manifest" -eq 0 ]; then
+            [ "$line" = "---" ] && in_manifest=1
+            continue
+        fi
+        [ -z "$line" ] && continue
+
+        local expected_hash file_path
+        expected_hash=$(echo "$line" | awk '{print $1}')
+        file_path=$(echo "$line" | awk '{print $2}')
+
+        if [ ! -f "$slot/$file_path" ]; then
+            emit "$phase" "$file_path" "MISSING"
+            failed=$((failed + 1))
+        else
+            local actual_hash
+            actual_hash=$(shasum -a 256 "$slot/$file_path" | awk '{print $1}')
+            if [ "$actual_hash" = "$expected_hash" ]; then
+                emit "$phase" "$file_path" "${expected_hash:0:8}"
+            else
+                emit "$phase" "$file_path" "MISMATCH"
+                failed=$((failed + 1))
+            fi
+        fi
+        checked=$((checked + 1))
+    done < "$slot/META"
+
+    [ "$checked" -gt 0 ] && [ "$failed" -eq 0 ]
+}
+
+# Verify destination (~/.claude/) matches a slot's checksums.
+# Used for round-trip verification after load.
+verify_destination() {
+    local slot="$1" phase="round"
+    local in_manifest=0 checked=0 failed=0
+
+    while IFS= read -r line; do
+        if [ "$in_manifest" -eq 0 ]; then
+            [ "$line" = "---" ] && in_manifest=1
+            continue
+        fi
+        [ -z "$line" ] && continue
+
+        local expected_hash file_path
+        expected_hash=$(echo "$line" | awk '{print $1}')
+        file_path=$(echo "$line" | awk '{print $2}')
+        local dest="$CLAUDE_HOME/$file_path"
+
+        if [ ! -f "$dest" ]; then
+            emit "$phase" "$file_path" "MISSING"
+            failed=$((failed + 1))
+        else
+            local actual_hash
+            actual_hash=$(shasum -a 256 "$dest" | awk '{print $1}')
+            if [ "$actual_hash" = "$expected_hash" ]; then
+                emit "$phase" "$file_path" "${expected_hash:0:8}"
+            else
+                emit "$phase" "$file_path" "MISMATCH"
+                failed=$((failed + 1))
+            fi
+        fi
+        checked=$((checked + 1))
+    done < "$slot/META"
+
+    [ "$checked" -gt 0 ] && [ "$failed" -eq 0 ]
+}
+
+# Save portables into target dir (silent — used internally)
 save_portable_to_dir() {
     local target="$1"
     local total=0
 
-    # MD directory artifacts
     for dname in "${PORTABLE_MD_DIRS[@]}"; do
         local src="$CLAUDE_HOME/$dname"
         if [ -d "$src" ]; then
@@ -81,7 +173,6 @@ save_portable_to_dir() {
         fi
     done
 
-    # Single-file artifacts
     for fname in "${PORTABLE_FILES[@]}"; do
         local src="$CLAUDE_HOME/$fname"
         if [ -f "$src" ]; then
@@ -92,7 +183,6 @@ save_portable_to_dir() {
     done
 
     write_meta "$target"
-
     [ "$total" -gt 0 ] && return 0 || return 1
 }
 
@@ -103,31 +193,53 @@ cmd_save() {
     validate_slot_name "$name"
     [[ "$name" == _backup_* ]] && die "Slot names starting with '_backup_' are reserved."
 
-    # Atomic write: temp dir → rename
+    banner "save $name"
+
+    # ── scan ──
+    local total=0
+    for dname in "${PORTABLE_MD_DIRS[@]}"; do
+        local src="$CLAUDE_HOME/$dname"
+        if [ -d "$src" ]; then
+            reject_symlinks "$src" "$src"
+            local n
+            n=$(find "$src" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+            emit "scan" "$dname/" "$n md"
+            total=$((total + n))
+        fi
+    done
+    for fname in "${PORTABLE_FILES[@]}"; do
+        local src="$CLAUDE_HOME/$fname"
+        if [ -f "$src" ]; then
+            [ -L "$src" ] && die "Symlink found: $src"
+            local sz
+            sz=$(wc -c < "$src" | tr -d ' ')
+            emit "scan" "$fname" "${sz}B"
+            total=$((total + 1))
+        fi
+    done
+    [ "$total" -eq 0 ] && fail "nothing portable in $CLAUDE_HOME"
+
+    # ── copy (atomic) ──
     local tmpdir
     tmpdir=$(mktemp -d "$SLOTS_DIR/.tmp.XXXX")
     trap 'rm -rf "$tmpdir"' EXIT
 
-    if ! save_portable_to_dir "$tmpdir"; then
-        die "Nothing portable found in $CLAUDE_HOME. Nothing to save."
-    fi
+    save_portable_to_dir "$tmpdir" || fail "copy failed"
+    emit "copy" "→ $(basename "$tmpdir")" "$total files"
+    emit "meta" "sha256 manifest" "written"
 
+    # ── swap ──
     rm -rf "${SLOTS_DIR:?}/$name"
     mv "$tmpdir" "$SLOTS_DIR/$name"
-    trap - EXIT  # disarm
+    trap - EXIT
+    emit "swap" "→ $name" "atomic"
 
-    # Summary
-    echo "Saved to slot '$name':"
-    for dname in "${PORTABLE_MD_DIRS[@]}"; do
-        if [ -d "$SLOTS_DIR/$name/$dname" ]; then
-            echo "  $dname/  $(find "$SLOTS_DIR/$name/$dname" -type f -name '*.md' | wc -l | tr -d ' ') file(s)"
-        fi
-    done
-    for fname in "${PORTABLE_FILES[@]}"; do
-        if [ -f "$SLOTS_DIR/$name/$fname" ]; then
-            echo "  $fname"
-        fi
-    done
+    # ── verify (handshake 1: local integrity) ──
+    if verify_slot "$SLOTS_DIR/$name" "check"; then
+        pass "$name  $total files  sha256 verified"
+    else
+        fail "$name  integrity check failed after save"
+    fi
 }
 
 cmd_load() {
@@ -137,49 +249,120 @@ cmd_load() {
     local slot="$SLOTS_DIR/$name"
     [ -d "$slot" ] || die "Slot '$name' not found."
     [ -f "$slot/META" ] || die "Slot '$name' is missing META — corrupted?"
-    reject_symlinks "$slot" "slot '$name'"
 
-    # Auto-backup current state before overwriting
+    banner "load $name"
+
+    # ── pre-verify slot (handshake 1: is source intact?) ──
+    reject_symlinks "$slot" "slot '$name'"
+    emit "guard" "no symlinks" "ok"
+
+    if ! verify_slot "$slot" "check"; then
+        fail "slot integrity check failed — refusing to load"
+    fi
+
+    # ── backup ──
     local backup_name="_backup_$(date -u +%Y%m%dT%H%M%SZ)"
     local backup_dir="$SLOTS_DIR/$backup_name"
     mkdir -p "$backup_dir"
     if save_portable_to_dir "$backup_dir"; then
-        echo "Auto-backup saved to '$backup_name'."
+        local bc
+        bc=$(find "$backup_dir" -type f ! -name META 2>/dev/null | wc -l | tr -d ' ')
+        emit "backup" "→ $backup_name" "$bc files"
     else
         rm -rf "$backup_dir"
-        echo "(No existing portable config to back up.)"
+        emit "backup" "(nothing to back up)" "skip"
     fi
 
-    # Load directory artifacts
+    # ── write ──
     for dname in "${PORTABLE_MD_DIRS[@]}"; do
         if [ -d "$slot/$dname" ]; then
             local dst="$CLAUDE_HOME/$dname"
             mkdir -p "$dst"
-            # Remove existing *.md recursively, then copy from slot
             find "$dst" -type f -name '*.md' -delete 2>/dev/null || true
-            copy_md_tree "$slot/$dname" "$dst" > /dev/null
+            local n
+            n=$(copy_md_tree "$slot/$dname" "$dst")
+            emit "write" "$dname/" "$n md → ~/.claude/"
         fi
     done
-
-    # Load single-file artifacts
     for fname in "${PORTABLE_FILES[@]}"; do
         if [ -f "$slot/$fname" ]; then
             cp "$slot/$fname" "$CLAUDE_HOME/$fname"
+            emit "write" "$fname" "→ ~/.claude/"
         fi
     done
 
-    # Summary
-    echo "Loaded from slot '$name':"
-    for dname in "${PORTABLE_MD_DIRS[@]}"; do
-        if [ -d "$slot/$dname" ]; then
-            echo "  $dname/  $(find "$slot/$dname" -type f -name '*.md' | wc -l | tr -d ' ') file(s)"
-        fi
-    done
-    for fname in "${PORTABLE_FILES[@]}"; do
-        if [ -f "$slot/$fname" ]; then
-            echo "  $fname"
-        fi
-    done
+    # ── round-trip verify (handshake 2: did destination receive correctly?) ──
+    if verify_destination "$slot"; then
+        pass "$name → ~/.claude/  round-trip verified"
+    else
+        fail "$name  round-trip verification failed"
+    fi
+}
+
+cmd_verify() {
+    local name="$1"
+    validate_slot_name "$name"
+
+    local slot="$SLOTS_DIR/$name"
+    [ -d "$slot" ] || die "Slot '$name' not found."
+    [ -f "$slot/META" ] || die "Slot '$name' is missing META — corrupted?"
+
+    banner "verify $name"
+
+    reject_symlinks "$slot" "slot '$name'"
+    emit "guard" "no symlinks" "ok"
+
+    if verify_slot "$slot" "check"; then
+        pass "$name  all checksums valid"
+    else
+        fail "$name  integrity check failed"
+    fi
+}
+
+cmd_sync() {
+    local name="$1"
+
+    # Save (includes scan → copy → swap → verify)
+    cmd_save "$name"
+
+    banner "sync $name → remote"
+
+    # ── git ──
+    cd "$SCRIPT_DIR"
+
+    git add "slots/$name/" 2>/dev/null || fail "git add failed"
+    emit "git" "add slots/$name/" "staged"
+
+    if git diff --cached --quiet 2>/dev/null; then
+        emit "git" "commit" "nothing new"
+    else
+        local out
+        out=$(git commit -m "habitat: save $name" 2>&1) || fail "git commit failed"
+        local sha
+        sha=$(echo "$out" | grep -o '[a-f0-9]\{7,\}' | head -1) || true
+        emit "git" "commit" "${sha:-ok}"
+    fi
+
+    git push 2>/dev/null || fail "git push failed"
+    emit "git" "push" "origin"
+
+    # ── remote verify (handshake 2: does remote match local?) ──
+    git fetch origin --quiet 2>/dev/null || true
+    local branch
+    branch=$(git branch --show-current)
+
+    local local_meta_hash remote_meta_hash
+    local_meta_hash=$(shasum -a 256 "slots/$name/META" | awk '{print $1}')
+    remote_meta_hash=$(git show "origin/$branch:slots/$name/META" 2>/dev/null \
+        | shasum -a 256 | awk '{print $1}') || true
+
+    if [ -n "$remote_meta_hash" ] && [ "$local_meta_hash" = "$remote_meta_hash" ]; then
+        emit "remote" "META" "${local_meta_hash:0:8} match"
+        pass "$name  local verified  remote verified"
+    else
+        emit "remote" "META" "MISMATCH"
+        fail "$name  remote verification failed"
+    fi
 }
 
 cmd_list() {
@@ -222,11 +405,13 @@ usage() {
     echo "Usage: habitat <command> [args]"
     echo ""
     echo "Commands:"
-    echo "  save <name>   Save portable ~/.claude/ config to a slot"
-    echo "  load <name>   Restore a slot into ~/.claude/ (auto-backs up first)"
-    echo "  list          Show available slots"
+    echo "  save <name>     Save config → slot (atomic + verify)"
+    echo "  load <name>     Slot → ~/.claude/ (backup + round-trip verify)"
+    echo "  verify <name>   Check slot integrity against sha256 manifest"
+    echo "  sync <name>     Save + verify + git push + verify remote"
+    echo "  list            Show available slots"
     echo ""
-    echo "Portable artifacts: commands/ agents/ skills/ settings.json CLAUDE.md"
+    echo "Portable: commands/ agents/ skills/ settings.json CLAUDE.md"
     echo "Set \$CLAUDE_HOME to override ~/.claude path."
     exit 1
 }
@@ -236,18 +421,10 @@ usage() {
 [ $# -lt 1 ] && usage
 
 case "$1" in
-    save)
-        [ $# -lt 2 ] && usage
-        cmd_save "$2"
-        ;;
-    load)
-        [ $# -lt 2 ] && usage
-        cmd_load "$2"
-        ;;
-    list)
-        cmd_list
-        ;;
-    *)
-        usage
-        ;;
+    save)   [ $# -lt 2 ] && usage; cmd_save "$2" ;;
+    load)   [ $# -lt 2 ] && usage; cmd_load "$2" ;;
+    verify) [ $# -lt 2 ] && usage; cmd_verify "$2" ;;
+    sync)   [ $# -lt 2 ] && usage; cmd_sync "$2" ;;
+    list)   cmd_list ;;
+    *)      usage ;;
 esac

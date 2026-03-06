@@ -1,6 +1,8 @@
 # Claude-Habitat
 
-Portable config manager for Claude Code. Saves/loads `~/.claude/` configuration across machines via git slots.
+The portable habitat for Claude Code — user side.
+
+`~/.claude/` is the live register file (active state). `slots/<name>/` is persistent storage. The `habitat` script is the sole store/load unit: a hardcoded allowlist controls exactly which user-authored, portable artifacts are transferred. Every transfer is SHA-256 verified end-to-end. Nothing outside the allowlist is ever read or written.
 
 ## Single deliverable
 
@@ -31,6 +33,7 @@ All logic lives in the `habitat` bash script. No other executables.
 7. Round-trip fidelity: `save X; load X` = identity on the portable set
 8. Additive load: missing categories not wiped (loading commands-only slot keeps settings.json)
 9. Recursive dir copy: subdirectories supported for namespaced commands
+10. Verification chain: every save verifies slot checksums, every load verifies destination round-trip, sync verifies remote META match
 
 ## `$CLAUDE_HOME` env var
 
@@ -39,8 +42,10 @@ Overrides `~/.claude` for all operations. Useful for testing.
 ## Testing
 
 ```bash
-./habitat save test1        # verify slot + META + sha256
-./habitat list              # verify metadata display
-./habitat load test1        # verify auto-backup + restore
+./habitat save test1        # scan → copy → swap → verify checksums
+./habitat verify test1      # standalone integrity check
+./habitat load test1        # check → backup → write → round-trip verify
+./habitat sync test1        # save + verify + git push + remote verify
+./habitat list              # metadata display
 ./habitat save "../bad"     # must fail: invalid name
 ```
