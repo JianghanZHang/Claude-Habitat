@@ -30,8 +30,11 @@ Three properties make this a protocol, not a script:
 | Skills | `~/.claude/skills/` | Recursive `*.md` tree |
 | Settings | `~/.claude/settings.json` | User-level permissions and rules |
 | Global instructions | `~/.claude/CLAUDE.md` | User-level Claude instructions |
+| Plugin registry | `~/.claude/plugins/installed_plugins.json` | Installed plugin versions |
+| Marketplace list | `~/.claude/plugins/known_marketplaces.json` | Known plugin sources |
+| Plugin blocklist | `~/.claude/plugins/blocklist.json` | Blocked plugins |
 
-Credentials, local settings, project configs, caches, and history are **never touched**.
+Credentials, local settings, project configs, plugin caches, marketplace clones, and history are **never touched**.
 
 ## Setup
 
@@ -66,9 +69,11 @@ Every operation prints a compiler-style verification chain:
 habitat · save mysetup
   scan     commands/                          3 md
   scan     settings.json                      412B
+  scan     plugins/installed_plugins.json     1651B
   copy     → .tmp.a1b2                      4 files
   meta     sha256 manifest                    written
   swap     → mysetup                        atomic
+  card     CARD.md                            written
   check    commands/test.md                   dd06a354
   check    settings.json                      a1b2c3d4
   ────────────────────────────────────────────────
@@ -91,16 +96,28 @@ git pull
 ```
 slots/<name>/
   META              # version, timestamp, hostname, os, sha256 manifest
+  CARD.md           # human-readable save card with fingerprint (derived from META)
   commands/          # recursive *.md tree
   agents/            # if present in source
   skills/            # if present in source
+  plugins/           # installed_plugins.json, known_marketplaces.json, blocklist.json
   settings.json      # if present in source
   CLAUDE.md          # if present in source
 ```
 
+## Save card (CARD.md)
+
+Each save generates a `CARD.md` — a human-readable identity card for the slot. It includes:
+
+- **Header table**: slot name, fingerprint, timestamp, hostname, OS, habitat version
+- **Contents inventory**: what skills, agents, plugins, commands are in the slot
+- **Fingerprint chain**: SHA-256 of the META file (since META contains checksums of every file, this single hash uniquely identifies the entire slot state)
+
+CARD.md is excluded from the META manifest — it's derived metadata, not source data. The integrity chain: files → META (checksums) → CARD (human summary + fingerprint).
+
 ## Safety
 
-- **Allowlist-only**: only the 5 artifact types above are ever read or written
+- **Allowlist-only**: only the 8 artifact types above are ever read or written
 - **Atomic save**: writes to temp dir, then renames (no partial state on failure)
 - **Auto-backup on load**: current config is saved to `_backup_<timestamp>` before any load overwrites
 - **Symlink rejection**: hard error if symlinks found anywhere in source or slot
