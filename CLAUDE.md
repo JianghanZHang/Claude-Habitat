@@ -17,13 +17,11 @@ All logic lives in the `habitat` bash script. No other executables.
 | skills | `~/.claude/skills/` | dir tree of `*.md` |
 | settings.json | `~/.claude/settings.json` | single file |
 | CLAUDE.md | `~/.claude/CLAUDE.md` | single file |
-| installed_plugins.json | `~/.claude/plugins/installed_plugins.json` | single file |
-| known_marketplaces.json | `~/.claude/plugins/known_marketplaces.json` | single file |
 | blocklist.json | `~/.claude/plugins/blocklist.json` | single file |
 
 ## NEVER touched — do not expand scope
 
-`.credentials.json`, `settings.local.json`, `~/.claude.json`, `projects/`, `debug/`, `backups/`, `cache/`, `file-history/`, `session-env/`, `shell-snapshots/`, `plugins/cache/`, `plugins/marketplaces/`, `history.jsonl`, `plans/`
+`.credentials.json`, `settings.local.json`, `~/.claude.json`, `projects/`, `debug/`, `backups/`, `cache/`, `file-history/`, `session-env/`, `shell-snapshots/`, `plugins/cache/`, `plugins/marketplaces/`, `plugins/installed_plugins.json`, `plugins/known_marketplaces.json`, `history.jsonl`, `plans/`
 
 ## Safety invariants
 

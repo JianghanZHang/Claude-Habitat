@@ -7,7 +7,7 @@ SLOTS_DIR="$SCRIPT_DIR/slots"
 
 PORTABLE_MD_DIRS=("commands" "agents" "skills")
 PORTABLE_FILES=("settings.json" "CLAUDE.md")
-PORTABLE_PLUGIN_FILES=("plugins/installed_plugins.json" "plugins/known_marketplaces.json" "plugins/blocklist.json")
+PORTABLE_PLUGIN_FILES=("plugins/blocklist.json")
 
 # ── Output (compiler-style) ─────────────────────────────────────────────
 
