@@ -1,0 +1,15 @@
+version: 2
+timestamp: 2026-03-07T00:02:38Z
+hostname: a2r-lab-1
+os: Linux-x86_64
+---
+5746e24918b9cb5351629c1760bd8d4b1c9e2206b17f753a4860e62a2737be09  agents/surgeon.md
+1c65c1d15701efc29a655643ae2e39cfb5abd1205e71aacae890313dfedba5a9  plugins/blocklist.json
+65d561607d5d6e62a24972a9966ba945f398bb0960cdc7bb41676861e3a6916b  plugins/installed_plugins.json
+d06ca9584c7b47431ed6f8d833b6019627ad86417bae625b6450efb286338e18  plugins/known_marketplaces.json
+5b863208d40263238071164999924ed096449073f4ea9bcb40c9ac22f10c00e0  settings.json
+282fd042b9d0d19c80af6215eab3565dbdf854d114af51714f265e316ecbd105  skills/dominos-reasoning/SKILL.md
+55108ce07639781d72e173c5a71c5ed9a3b930151cf8be13d268f06b1bd44d80  skills/latex-surgery/skill.md
+30a23e3af92c652efe5d96154f16cbec59b04851a04635f3bc2dd3eaaf176265  skills/performance-time-contraction/SKILL.md
+2f421e386edaa4df3c7ca961a3b1685a9893233a72a68abc879e7c1acea28f12  skills/seeit/SKILL.md
+160816fdc4f60a90734cee3daf180d7ebbac2f0a89ff91af20f02ff6ce8200c4  skills/self-symbolic-consistency-check/SKILL.md
