@@ -1,8 +1,8 @@
-# Save Card -- linux
+# Save Card -- a2r_gpu
 
 | Field | Value |
 |---|---|
-| Slot | `linux` |
+| Slot | `a2r_gpu` |
 | Fingerprint | `885bdc42c8901d727e313ef3bbea31c9bdad620d64bfca433ffa02d8d61a7f85` |
 | Saved | `2026-03-07T00:02:38Z` |
 | Host | `a2r-lab-1` |
